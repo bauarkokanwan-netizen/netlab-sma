@@ -88,14 +88,15 @@ function isCorrectCable(sourceKind: DeviceKind, targetKind: DeviceKind, cableTyp
   return true;
 }
 
-function cableStyle(sourceKind: DeviceKind, targetKind: DeviceKind, cableType: CableKind, selected = false) {
+function cableStyle(sourceKind: DeviceKind, targetKind: DeviceKind, cableType: CableKind, selected = false): Record<string, string | number> {
   const valid = isCorrectCable(sourceKind, targetKind, cableType);
   const stroke = cableType === "console" ? "#64748b" : valid ? "#16a34a" : "#dc2626";
-  return {
+  const base: Record<string, string | number> = {
     stroke,
     strokeWidth: selected ? 4 : 2.5,
-    strokeDasharray: cableType === "console" ? "6 4" : undefined,
-  } as Record<string, string | number | undefined>;
+  };
+  if (cableType === "console") base.strokeDasharray = "6 4";
+  return base;
 }
 
 function DeviceNode({ data }: any) {
@@ -123,8 +124,8 @@ function getIcon(kind: DeviceKind) {
   return <Server className="h-5 w-5" />;
 }
 
-function decorateEdges(edges: AppEdge[], nodes: AppNode[], selectedEdgeId = "") {
-  return edges.map((edge) => {
+function decorateEdges(edges: AppEdge[], nodes: AppNode[], selectedEdgeId = ""): AppEdge[] {
+  return edges.map((edge): AppEdge => {
     const source = nodes.find((item) => item.id === edge.source);
     const target = nodes.find((item) => item.id === edge.target);
     const currentCableType = edge.data?.cableType || "straight";
@@ -189,6 +190,7 @@ export default function SimulatorPage() {
 
   const typedNodes = nodes as AppNode[];
   const typedEdges = edges as AppEdge[];
+  const decoratedEdges = decorateEdges(typedEdges, typedNodes, selectedEdgeId);
   const selectedNode = typedNodes.find((node) => node.id === selectedId);
   const selectedEdge = typedEdges.find((edge) => edge.id === selectedEdgeId);
   const endDeviceNodes = useMemo(() => typedNodes.filter((node) => isEndDevice(node.data.kind)), [typedNodes]);
@@ -289,7 +291,7 @@ export default function SimulatorPage() {
       </header>
       <section className="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_390px]">
         <div className="h-[690px] overflow-hidden rounded-3xl border bg-white shadow">
-          <ReactFlow nodes={decorateEdges(typedEdges, typedNodes, selectedEdgeId).length ? nodes : nodes} edges={decorateEdges(typedEdges, typedNodes, selectedEdgeId)} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={(_, node) => { setSelectedId(node.id); setSelectedEdgeId(""); }} onEdgeClick={(_, edge) => { setSelectedEdgeId(edge.id); setSelectedId(""); setResult("Kabel dipilih. Klik Hapus Kabel untuk menghapusnya."); }} deleteKeyCode={["Backspace", "Delete"]} onEdgesDelete={(deleted) => { const deletedIds = new Set(deleted.map((edge) => edge.id)); const nextEdges = typedEdges.filter((edge) => !deletedIds.has(edge.id)); refreshAfterEdges(nextEdges); setSelectedEdgeId(""); }} fitView>
+          <ReactFlow nodes={nodes} edges={decoratedEdges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} onNodeClick={(_, node) => { setSelectedId(node.id); setSelectedEdgeId(""); }} onEdgeClick={(_, edge) => { setSelectedEdgeId(edge.id); setSelectedId(""); setResult("Kabel dipilih. Klik Hapus Kabel untuk menghapusnya."); }} deleteKeyCode={["Backspace", "Delete"]} onEdgesDelete={(deleted) => { const deletedIds = new Set(deleted.map((edge) => edge.id)); const nextEdges = typedEdges.filter((edge) => !deletedIds.has(edge.id)); refreshAfterEdges(nextEdges); setSelectedEdgeId(""); }} fitView>
             <Background /><Controls /><MiniMap />
           </ReactFlow>
         </div>
