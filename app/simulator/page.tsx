@@ -1,12 +1,13 @@
 "use client";
 
+// NetLab SMA simulator - latest version for Vercel build.
 import { useState } from "react";
 import { ReactFlow, Background, Controls, MiniMap, addEdge, useEdgesState, useNodesState, Handle, Position } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Monitor, Server, Router, Printer, Plus } from "lucide-react";
 
-const initialNodes = [];
-const initialEdges = [];
+const initialNodes: any[] = [];
+const initialEdges: any[] = [];
 
 function DeviceNode({ data }: any) {
   const Icon = data.kind === "PC" ? Monitor : data.kind === "Router" ? Router : data.kind === "Printer" ? Printer : Server;
@@ -68,11 +69,11 @@ export default function SimulatorPage() {
       },
     };
 
-    setNodes((nds) => [...nds, node]);
+    setNodes((nds: any[]) => [...nds, node]);
   }
 
   function updateStatuses(nextEdges: any[]) {
-    setNodes((nds: any) =>
+    setNodes((nds: any[]) =>
       nds.map((node: any) => {
         const connected = nextEdges.some((e: any) => e.source === node.id || e.target === node.id);
 
