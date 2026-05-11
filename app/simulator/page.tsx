@@ -24,9 +24,10 @@ import {
   Server,
   Trash2,
   XCircle,
+  Wand2,
 } from "lucide-react";
 
-type DeviceKind = "PC" | "Switch" | "Router" | "Printer";
+type DeviceKind = "PC" | "Switch" | "Router" | "Printer" | "DHCP";
 type CableKind = "straight" | "crossover" | "console";
 type PortStatus = "connected" | "waiting" | "disconnected";
 
@@ -64,6 +65,10 @@ function isEndDevice(kind: DeviceKind) {
   return kind === "PC" || kind === "Printer";
 }
 
+function isHostLike(kind: DeviceKind) {
+  return kind === "PC" || kind === "Printer" || kind === "DHCP";
+}
+
 function isConfigured(node?: AppNode) {
   if (!node) return false;
   if (!isEndDevice(node.data.kind)) return true;
@@ -84,10 +89,10 @@ function getSubnet24(ip = "") {
 
 function isCorrectCable(sourceKind: DeviceKind, targetKind: DeviceKind, cableType: CableKind) {
   if (cableType === "console") return false;
-  const sourceEnd = isEndDevice(sourceKind);
-  const targetEnd = isEndDevice(targetKind);
-  if (sourceEnd && targetEnd) return cableType === "crossover";
-  if ((sourceEnd && targetKind === "Switch") || (targetEnd && sourceKind === "Switch")) return cableType === "straight";
+  const sourceHost = isHostLike(sourceKind);
+  const targetHost = isHostLike(targetKind);
+  if (sourceHost && targetHost) return cableType === "crossover";
+  if ((sourceHost && targetKind === "Switch") || (targetHost && sourceKind === "Switch")) return cableType === "straight";
   if ((sourceKind === "Router" && targetKind === "Switch") || (sourceKind === "Switch" && targetKind === "Router")) return cableType === "straight";
   return true;
 }
@@ -163,6 +168,28 @@ function updateNodeStatuses(nodes: AppNode[], edges: AppEdge[]) {
   });
 }
 
+function physicalConnected(start: string, end: string, edges: AppEdge[], nodes: AppNode[]) {
+  const graph = new Map<string, string[]>();
+  for (const edge of edges) {
+    const source = nodes.find((node) => node.id === edge.source);
+    const target = nodes.find((node) => node.id === edge.target);
+    if (!source || !target) continue;
+    const currentCableType = edge.data?.cableType || "straight";
+    if (!isCorrectCable(source.data.kind, target.data.kind, currentCableType)) continue;
+    graph.set(edge.source, [...(graph.get(edge.source) || []), edge.target]);
+    graph.set(edge.target, [...(graph.get(edge.target) || []), edge.source]);
+  }
+  const queue = [start];
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (current === end) return true;
+    visited.add(current);
+    for (const next of graph.get(current) || []) if (!visited.has(next)) queue.push(next);
+  }
+  return false;
+}
+
 function networkConnected(start: string, end: string, edges: AppEdge[], nodes: AppNode[]) {
   const graph = new Map<string, string[]>();
   for (const edge of edges) {
@@ -203,6 +230,7 @@ export default function SimulatorPage() {
   const selectedEdge = typedEdges.find((edge) => edge.id === selectedEdgeId);
   const endDeviceNodes = useMemo(() => typedNodes.filter((node) => isEndDevice(node.data.kind)), [typedNodes]);
   const hasSwitch = typedNodes.some((node) => node.data.kind === "Switch");
+  const hasDhcp = typedNodes.some((node) => node.data.kind === "DHCP");
   const configuredEndDeviceCount = endDeviceNodes.filter((node) => node.data.ip && node.data.mask).length;
   const validCableCount = useMemo(() => typedEdges.filter((edge) => {
     const source = typedNodes.find((node) => node.id === edge.source);
@@ -219,7 +247,8 @@ export default function SimulatorPage() {
   function addDevice(kind: DeviceKind) {
     const count = typedNodes.filter((node) => node.data.kind === kind).length + 1;
     const id = `${kind.toLowerCase()}-${Date.now()}`;
-    const newNode: AppNode = { id, type: "device", position: { x: 120 + count * 35, y: 120 + count * 35 }, data: { label: `${kind}${count}`, kind, ip: "", mask: "", gateway: "", status: "disconnected" } };
+    const label = kind === "DHCP" ? `DHCP${count}` : `${kind}${count}`;
+    const newNode: AppNode = { id, type: "device", position: { x: 120 + count * 35, y: 120 + count * 35 }, data: { label, kind, ip: "", mask: "", gateway: "", status: "disconnected" } };
     setNodes((currentNodes: AppNode[]) => [...currentNodes, newNode]);
     setSelectedId(id);
     setSelectedEdgeId("");
@@ -234,6 +263,45 @@ export default function SimulatorPage() {
       const updatedNodes = currentNodes.map((node) => node.id === selectedId ? { ...node, data: { ...node.data, [field]: value } } : node);
       return updateNodeStatuses(updatedNodes, typedEdges);
     });
+  }
+
+  function autoIpSelectedDevice() {
+    if (!selectedNode || !isEndDevice(selectedNode.data.kind)) {
+      setResult("Pilih PC atau Printer terlebih dahulu untuk Auto IP.");
+      return;
+    }
+
+    const dhcpServer = typedNodes.find((node) => node.data.kind === "DHCP");
+    if (!dhcpServer) {
+      setResult("❌ Auto IP gagal: tambahkan DHCP Server terlebih dahulu.");
+      return;
+    }
+
+    if (!physicalConnected(selectedNode.id, dhcpServer.id, typedEdges, typedNodes)) {
+      setResult("❌ Auto IP gagal: perangkat belum terhubung ke DHCP Server dengan kabel yang benar.");
+      return;
+    }
+
+    const usedIps = new Set(typedNodes.map((node) => node.data.ip).filter(Boolean));
+    let nextIp = "";
+    for (let host = 10; host <= 254; host++) {
+      const candidate = `192.168.1.${host}`;
+      if (!usedIps.has(candidate)) {
+        nextIp = candidate;
+        break;
+      }
+    }
+
+    if (!nextIp) {
+      setResult("❌ Auto IP gagal: pool DHCP sudah penuh.");
+      return;
+    }
+
+    setNodes((currentNodes: AppNode[]) => {
+      const updatedNodes = currentNodes.map((node) => node.id === selectedNode.id ? { ...node, data: { ...node.data, ip: nextIp, mask: "255.255.255.0", gateway: "192.168.1.1" } } : node);
+      return updateNodeStatuses(updatedNodes, typedEdges);
+    });
+    setResult(`✅ DHCP berhasil: ${selectedNode.data.label} mendapat IP ${nextIp}.`);
   }
 
   function removeSelectedCable() {
@@ -304,13 +372,14 @@ export default function SimulatorPage() {
     <main className="flex min-h-screen flex-col bg-slate-100">
       <header className="border-b bg-white px-5 py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div><h1 className="text-2xl font-bold">NetLab SMA - Simulator</h1><p className="text-sm text-slate-500">Pilih kabel, tambah perangkat, isi IP, lalu test ping. Klik perangkat/kabel untuk menghapus.</p></div>
+          <div><h1 className="text-2xl font-bold">NetLab SMA - Simulator</h1><p className="text-sm text-slate-500">Pilih kabel, tambah perangkat, isi IP manual atau gunakan DHCP, lalu test ping.</p></div>
           <div className="flex flex-wrap gap-2">
             <select value={cableType} onChange={(event) => setCableType(event.target.value as CableKind)} className="rounded-xl border bg-white px-3 py-2 text-sm font-semibold"><option value="straight">Kabel Straight</option><option value="crossover">Kabel Crossover</option><option value="console">Kabel Console</option></select>
             <button onClick={() => addDevice("PC")} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-white"><Plus className="h-4 w-4" /> PC</button>
             <button onClick={() => addDevice("Switch")} className="flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-white"><Plus className="h-4 w-4" /> Switch</button>
             <button onClick={() => addDevice("Router")} className="flex items-center gap-2 rounded-xl bg-purple-600 px-4 py-2 text-white"><Plus className="h-4 w-4" /> Router</button>
             <button onClick={() => addDevice("Printer")} className="flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-white"><Plus className="h-4 w-4" /> Printer</button>
+            <button onClick={() => addDevice("DHCP")} className="flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-white"><Plus className="h-4 w-4" /> DHCP</button>
             <button onClick={removeSelectedDevice} className="flex items-center gap-2 rounded-xl bg-pink-600 px-4 py-2 text-white"><Trash2 className="h-4 w-4" /> Hapus Perangkat</button>
             <button onClick={removeSelectedCable} className="flex items-center gap-2 rounded-xl bg-orange-600 px-4 py-2 text-white"><Trash2 className="h-4 w-4" /> Hapus Kabel</button>
             <button onClick={resetLab} className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-white"><Trash2 className="h-4 w-4" /> Reset</button>
@@ -345,11 +414,11 @@ export default function SimulatorPage() {
         <aside className="space-y-4">
           <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 flex items-center gap-2 text-lg font-bold"><Cable className="h-5 w-5" /> Test Ping</h2><label className="text-sm font-semibold">Dari Perangkat</label><select value={fromId} onChange={(event) => setFromId(event.target.value)} className="mt-1 w-full rounded-xl border p-2"><option value="">Pilih perangkat</option>{endDeviceNodes.map((node) => <option key={node.id} value={node.id}>{node.data.label}</option>)}</select><label className="mt-3 block text-sm font-semibold">Ke Perangkat</label><select value={toId} onChange={(event) => setToId(event.target.value)} className="mt-1 w-full rounded-xl border p-2"><option value="">Pilih perangkat</option>{endDeviceNodes.map((node) => <option key={node.id} value={node.id}>{node.data.label}</option>)}</select><button onClick={runPing} className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-green-600 px-4 py-3 font-semibold text-white"><Play className="h-4 w-4" /> Test Ping</button><div className="mt-4 rounded-2xl bg-slate-100 p-4 text-sm font-medium">{result}</div></div>
 
-          <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 text-lg font-bold">Cek Otomatis Praktikum</h2><div className="space-y-2 text-sm"><div className="flex items-center gap-2">{endDeviceNodes.length >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Minimal 2 PC/Printer</div><div className="flex items-center gap-2">{hasSwitch ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Ada Switch</div><div className="flex items-center gap-2">{typedEdges.length >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Minimal 2 kabel</div><div className="flex items-center gap-2">{invalidCableCount === 0 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Kabel benar: {validCableCount}/{typedEdges.length}</div><div className="flex items-center gap-2">{configuredEndDeviceCount >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} IP terisi: {configuredEndDeviceCount}/{endDeviceNodes.length}</div></div></div>
+          <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 text-lg font-bold">Cek Otomatis Praktikum</h2><div className="space-y-2 text-sm"><div className="flex items-center gap-2">{endDeviceNodes.length >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Minimal 2 PC/Printer</div><div className="flex items-center gap-2">{hasSwitch ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Ada Switch</div><div className="flex items-center gap-2">{hasDhcp ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} DHCP Server tersedia</div><div className="flex items-center gap-2">{typedEdges.length >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Minimal 2 kabel</div><div className="flex items-center gap-2">{invalidCableCount === 0 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Kabel benar: {validCableCount}/{typedEdges.length}</div><div className="flex items-center gap-2">{configuredEndDeviceCount >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} IP terisi: {configuredEndDeviceCount}/{endDeviceNodes.length}</div></div></div>
 
-          <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 text-lg font-bold">Konfigurasi Perangkat</h2>{selectedNode ? (<div className="space-y-3"><div className="flex items-center gap-2 rounded-2xl bg-slate-100 p-3">{getIcon(selectedNode.data.kind)}<span className="font-semibold">{selectedNode.data.kind}</span></div><label className="block text-sm font-semibold">Nama</label><input value={selectedNode.data.label} onChange={(event) => updateSelected("label", event.target.value)} className="w-full rounded-xl border p-2" />{canConfigureIp && (<><label className="block text-sm font-semibold">IP Address</label><input value={selectedNode.data.ip} onChange={(event) => updateSelected("ip", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.2" /><label className="block text-sm font-semibold">Subnet Mask</label><input value={selectedNode.data.mask} onChange={(event) => updateSelected("mask", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 255.255.255.0" /><label className="block text-sm font-semibold">Gateway</label><input value={selectedNode.data.gateway} onChange={(event) => updateSelected("gateway", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.1" /></>)}</div>) : selectedEdge ? (<p className="text-slate-600">Kabel dipilih: <b>{selectedEdge.label}</b>. Tekan tombol <b>Hapus Kabel</b> atau tombol <b>Delete</b>.</p>) : (<p className="text-slate-500">Belum ada perangkat/kabel dipilih.</p>)}</div>
+          <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 text-lg font-bold">Konfigurasi Perangkat</h2>{selectedNode ? (<div className="space-y-3"><div className="flex items-center gap-2 rounded-2xl bg-slate-100 p-3">{getIcon(selectedNode.data.kind)}<span className="font-semibold">{selectedNode.data.kind}</span></div><label className="block text-sm font-semibold">Nama</label><input value={selectedNode.data.label} onChange={(event) => updateSelected("label", event.target.value)} className="w-full rounded-xl border p-2" />{canConfigureIp && (<><div className="rounded-2xl bg-slate-50 p-3 text-sm"><b>Mode IP:</b> isi manual untuk Static IP, atau klik Auto IP untuk Dynamic IP dari DHCP.</div><label className="block text-sm font-semibold">IP Address</label><input value={selectedNode.data.ip} onChange={(event) => updateSelected("ip", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.2" /><label className="block text-sm font-semibold">Subnet Mask</label><input value={selectedNode.data.mask} onChange={(event) => updateSelected("mask", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 255.255.255.0" /><label className="block text-sm font-semibold">Gateway</label><input value={selectedNode.data.gateway} onChange={(event) => updateSelected("gateway", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.1" /><button onClick={autoIpSelectedDevice} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 font-semibold text-white"><Wand2 className="h-4 w-4" /> Auto IP dari DHCP</button></>)}</div>) : selectedEdge ? (<p className="text-slate-600">Kabel dipilih: <b>{selectedEdge.label}</b>. Tekan tombol <b>Hapus Kabel</b> atau tombol <b>Delete</b>.</p>) : (<p className="text-slate-500">Belum ada perangkat/kabel dipilih.</p>)}</div>
 
-          <div className="rounded-3xl bg-white p-5 text-sm shadow"><b>Status Lampu & Kabel:</b><div className="mt-2 flex flex-wrap gap-3"><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-green-500" /> Connected / kabel benar + IP lengkap</div><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-yellow-400" /> Waiting / kabel salah atau IP belum lengkap</div><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-red-500" /> Disconnected</div></div><p className="mt-2 text-slate-600">Kabel hijau = jenis kabel benar. Lampu hijau hanya muncul jika perangkat sudah terhubung dan IP sudah lengkap.</p></div>
+          <div className="rounded-3xl bg-white p-5 text-sm shadow"><b>Status Lampu & Kabel:</b><div className="mt-2 flex flex-wrap gap-3"><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-green-500" /> Connected / kabel benar + IP lengkap</div><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-yellow-400" /> Waiting / kabel salah atau IP belum lengkap</div><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-red-500" /> Disconnected</div></div><p className="mt-2 text-slate-600">Static IP = isi manual. Dynamic IP = gunakan DHCP Server dan tombol Auto IP.</p></div>
         </aside>
       </section>
     </main>
