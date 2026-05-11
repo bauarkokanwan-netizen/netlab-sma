@@ -190,7 +190,7 @@ function physicalConnected(start: string, end: string, edges: AppEdge[], nodes: 
   return false;
 }
 
-function networkConnected(start: string, end: string, edges: AppEdge[], nodes: AppNode[]) {
+function buildNetworkGraph(edges: AppEdge[], nodes: AppNode[]) {
   const graph = new Map<string, string[]>();
   for (const edge of edges) {
     const source = nodes.find((node) => node.id === edge.source);
@@ -202,6 +202,11 @@ function networkConnected(start: string, end: string, edges: AppEdge[], nodes: A
     graph.set(edge.source, [...(graph.get(edge.source) || []), edge.target]);
     graph.set(edge.target, [...(graph.get(edge.target) || []), edge.source]);
   }
+  return graph;
+}
+
+function networkConnected(start: string, end: string, edges: AppEdge[], nodes: AppNode[]) {
+  const graph = buildNetworkGraph(edges, nodes);
   const queue = [start];
   const visited = new Set<string>();
   while (queue.length > 0) {
@@ -213,6 +218,28 @@ function networkConnected(start: string, end: string, edges: AppEdge[], nodes: A
   return false;
 }
 
+function findPacketPath(start: string, end: string, edges: AppEdge[], nodes: AppNode[]) {
+  const graph = buildNetworkGraph(edges, nodes);
+  const queue: string[][] = [[start]];
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const path = queue.shift()!;
+    const current = path[path.length - 1];
+
+    if (current === end) {
+      return path.map((id) => nodes.find((node) => node.id === id)?.data.label || id);
+    }
+
+    visited.add(current);
+    for (const next of graph.get(current) || []) {
+      if (!visited.has(next)) queue.push([...path, next]);
+    }
+  }
+
+  return [];
+}
+
 export default function SimulatorPage() {
   const [nodes, setNodes, onNodesChange] = useNodesState<any>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<any>(initialEdges);
@@ -222,6 +249,8 @@ export default function SimulatorPage() {
   const [toId, setToId] = useState("");
   const [cableType, setCableType] = useState<CableKind>("straight");
   const [result, setResult] = useState("Canvas kosong. Tambahkan perangkat untuk mulai praktik.");
+  const [packetRoute, setPacketRoute] = useState<string[]>([]);
+  const [packetStep, setPacketStep] = useState(0);
 
   const typedNodes = nodes as AppNode[];
   const typedEdges = edges as AppEdge[];
@@ -242,6 +271,18 @@ export default function SimulatorPage() {
 
   function refreshAfterEdges(nextEdges: AppEdge[]) {
     setNodes((currentNodes: AppNode[]) => updateNodeStatuses(currentNodes, nextEdges));
+  }
+
+  function animatePacket(route: string[]) {
+    setPacketRoute(route);
+    setPacketStep(0);
+
+    let step = 0;
+    const intervalId = window.setInterval(() => {
+      step += 1;
+      setPacketStep(step);
+      if (step >= route.length - 1) window.clearInterval(intervalId);
+    }, 650);
   }
 
   function addDevice(kind: DeviceKind) {
@@ -344,6 +385,8 @@ export default function SimulatorPage() {
     setSelectedEdgeId("");
     setFromId("");
     setToId("");
+    setPacketRoute([]);
+    setPacketStep(0);
     setResult("Canvas dikosongkan. Mulai praktik dari awal.");
   }
 
@@ -363,7 +406,10 @@ export default function SimulatorPage() {
     if (!from.data.ip || !to.data.ip) return setResult("❌ Ping gagal: IP address perangkat belum lengkap.");
     if (!networkConnected(from.id, to.id, typedEdges, typedNodes)) return setResult(`❌ Ping gagal: ${from.data.label} belum terhubung ke ${to.data.label}, atau jenis kabel salah.`);
     if (getSubnet24(from.data.ip) !== getSubnet24(to.data.ip)) return setResult(`❌ Ping gagal: subnet berbeda. ${from.data.ip} dan ${to.data.ip} tidak satu jaringan /24.`);
-    setResult(`✅ Ping berhasil: ${from.data.label} dapat terhubung ke ${to.data.label}.`);
+
+    const route = findPacketPath(from.id, to.id, typedEdges, typedNodes);
+    animatePacket(route);
+    setResult(`✅ Ping berhasil: ${from.data.label} dapat terhubung ke ${to.data.label}. Packet dikirim melalui ${route.join(" → ")}.`);
   }
 
   const canConfigureIp = selectedNode?.data.kind === "PC" || selectedNode?.data.kind === "Printer";
@@ -413,6 +459,8 @@ export default function SimulatorPage() {
 
         <aside className="space-y-4">
           <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 flex items-center gap-2 text-lg font-bold"><Cable className="h-5 w-5" /> Test Ping</h2><label className="text-sm font-semibold">Dari Perangkat</label><select value={fromId} onChange={(event) => setFromId(event.target.value)} className="mt-1 w-full rounded-xl border p-2"><option value="">Pilih perangkat</option>{endDeviceNodes.map((node) => <option key={node.id} value={node.id}>{node.data.label}</option>)}</select><label className="mt-3 block text-sm font-semibold">Ke Perangkat</label><select value={toId} onChange={(event) => setToId(event.target.value)} className="mt-1 w-full rounded-xl border p-2"><option value="">Pilih perangkat</option>{endDeviceNodes.map((node) => <option key={node.id} value={node.id}>{node.data.label}</option>)}</select><button onClick={runPing} className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-green-600 px-4 py-3 font-semibold text-white"><Play className="h-4 w-4" /> Test Ping</button><div className="mt-4 rounded-2xl bg-slate-100 p-4 text-sm font-medium">{result}</div></div>
+
+          <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 text-lg font-bold">Packet Animation</h2>{packetRoute.length > 0 ? (<div className="rounded-2xl bg-blue-50 p-4 text-sm"><div className="mb-3 font-semibold">Simulasi paket berjalan:</div><div className="flex flex-wrap items-center gap-2">{packetRoute.map((label, index) => (<div key={`${label}-${index}`} className="flex items-center gap-2"><span className={`rounded-xl px-3 py-2 font-semibold ${index === packetStep ? "bg-blue-600 text-white" : index < packetStep ? "bg-green-100 text-green-700" : "bg-white text-slate-700"}`}>{index === packetStep ? "📦 " : ""}{label}</span>{index < packetRoute.length - 1 ? <span className="font-bold text-blue-500">→</span> : null}</div>))}</div></div>) : (<p className="text-sm text-slate-500">Klik Test Ping berhasil untuk melihat paket bergerak dari asal ke tujuan.</p>)}</div>
 
           <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 text-lg font-bold">Cek Otomatis Praktikum</h2><div className="space-y-2 text-sm"><div className="flex items-center gap-2">{endDeviceNodes.length >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Minimal 2 PC/Printer</div><div className="flex items-center gap-2">{hasSwitch ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Ada Switch</div><div className="flex items-center gap-2">{hasDhcp ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} DHCP Server tersedia</div><div className="flex items-center gap-2">{typedEdges.length >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Minimal 2 kabel</div><div className="flex items-center gap-2">{invalidCableCount === 0 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Kabel benar: {validCableCount}/{typedEdges.length}</div><div className="flex items-center gap-2">{configuredEndDeviceCount >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} IP terisi: {configuredEndDeviceCount}/{endDeviceNodes.length}</div></div></div>
 
