@@ -64,6 +64,12 @@ function isEndDevice(kind: DeviceKind) {
   return kind === "PC" || kind === "Printer";
 }
 
+function isConfigured(node?: AppNode) {
+  if (!node) return false;
+  if (!isEndDevice(node.data.kind)) return true;
+  return Boolean(node.data.ip.trim() && node.data.mask.trim());
+}
+
 function cableLabel(type: CableKind) {
   if (type === "straight") return "Straight";
   if (type === "crossover") return "Crossover";
@@ -139,15 +145,20 @@ function updateNodeStatuses(nodes: AppNode[], edges: AppEdge[]) {
   return nodes.map((node) => {
     const connectedEdges = edges.filter((edge) => edge.source === node.id || edge.target === node.id);
     let status: PortStatus = "disconnected";
+
     if (connectedEdges.length > 0) {
-      const allValid = connectedEdges.every((edge) => {
+      const allCableAndIpReady = connectedEdges.every((edge) => {
         const source = nodes.find((item) => item.id === edge.source);
         const target = nodes.find((item) => item.id === edge.target);
         if (!source || !target) return false;
-        return isCorrectCable(source.data.kind, target.data.kind, edge.data?.cableType || "straight");
+        const cableOk = isCorrectCable(source.data.kind, target.data.kind, edge.data?.cableType || "straight");
+        const ipOk = isConfigured(source) && isConfigured(target);
+        return cableOk && ipOk;
       });
-      status = allValid ? "connected" : "waiting";
+
+      status = allCableAndIpReady ? "connected" : "waiting";
     }
+
     return { ...node, data: { ...node.data, status } };
   });
 }
@@ -160,6 +171,7 @@ function networkConnected(start: string, end: string, edges: AppEdge[], nodes: A
     if (!source || !target) continue;
     const currentCableType = edge.data?.cableType || "straight";
     if (!isCorrectCable(source.data.kind, target.data.kind, currentCableType)) continue;
+    if (!isConfigured(source) || !isConfigured(target)) continue;
     graph.set(edge.source, [...(graph.get(edge.source) || []), edge.target]);
     graph.set(edge.target, [...(graph.get(edge.target) || []), edge.source]);
   }
@@ -218,7 +230,10 @@ export default function SimulatorPage() {
   }
 
   function updateSelected(field: keyof AppNode["data"], value: string) {
-    setNodes((currentNodes: AppNode[]) => currentNodes.map((node) => node.id === selectedId ? { ...node, data: { ...node.data, [field]: value } } : node));
+    setNodes((currentNodes: AppNode[]) => {
+      const updatedNodes = currentNodes.map((node) => node.id === selectedId ? { ...node, data: { ...node.data, [field]: value } } : node);
+      return updateNodeStatuses(updatedNodes, typedEdges);
+    });
   }
 
   function removeSelectedCable() {
@@ -277,8 +292,8 @@ export default function SimulatorPage() {
     const to = typedNodes.find((node) => node.id === toId);
     if (!from || !to || fromId === toId) return setResult("Tambahkan minimal 2 PC/Printer, lalu pilih asal dan tujuan yang berbeda.");
     if (!isEndDevice(from.data.kind) || !isEndDevice(to.data.kind)) return setResult("Ping hanya bisa dilakukan dari/ke PC atau Printer.");
-    if (!networkConnected(from.id, to.id, typedEdges, typedNodes)) return setResult(`❌ Ping gagal: ${from.data.label} belum terhubung ke ${to.data.label}, atau jenis kabel salah.`);
     if (!from.data.ip || !to.data.ip) return setResult("❌ Ping gagal: IP address perangkat belum lengkap.");
+    if (!networkConnected(from.id, to.id, typedEdges, typedNodes)) return setResult(`❌ Ping gagal: ${from.data.label} belum terhubung ke ${to.data.label}, atau jenis kabel salah.`);
     if (getSubnet24(from.data.ip) !== getSubnet24(to.data.ip)) return setResult(`❌ Ping gagal: subnet berbeda. ${from.data.ip} dan ${to.data.ip} tidak satu jaringan /24.`);
     setResult(`✅ Ping berhasil: ${from.data.label} dapat terhubung ke ${to.data.label}.`);
   }
@@ -334,7 +349,7 @@ export default function SimulatorPage() {
 
           <div className="rounded-3xl bg-white p-5 shadow"><h2 className="mb-3 text-lg font-bold">Konfigurasi Perangkat</h2>{selectedNode ? (<div className="space-y-3"><div className="flex items-center gap-2 rounded-2xl bg-slate-100 p-3">{getIcon(selectedNode.data.kind)}<span className="font-semibold">{selectedNode.data.kind}</span></div><label className="block text-sm font-semibold">Nama</label><input value={selectedNode.data.label} onChange={(event) => updateSelected("label", event.target.value)} className="w-full rounded-xl border p-2" />{canConfigureIp && (<><label className="block text-sm font-semibold">IP Address</label><input value={selectedNode.data.ip} onChange={(event) => updateSelected("ip", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.2" /><label className="block text-sm font-semibold">Subnet Mask</label><input value={selectedNode.data.mask} onChange={(event) => updateSelected("mask", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 255.255.255.0" /><label className="block text-sm font-semibold">Gateway</label><input value={selectedNode.data.gateway} onChange={(event) => updateSelected("gateway", event.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.1" /></>)}</div>) : selectedEdge ? (<p className="text-slate-600">Kabel dipilih: <b>{selectedEdge.label}</b>. Tekan tombol <b>Hapus Kabel</b> atau tombol <b>Delete</b>.</p>) : (<p className="text-slate-500">Belum ada perangkat/kabel dipilih.</p>)}</div>
 
-          <div className="rounded-3xl bg-white p-5 text-sm shadow"><b>Status Lampu & Kabel:</b><div className="mt-2 flex flex-wrap gap-3"><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-green-500" /> Connected / kabel benar</div><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-yellow-400" /> Waiting / kabel salah</div><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-red-500" /> Disconnected</div></div><p className="mt-2 text-slate-600">Kabel hijau = benar, merah = salah, abu putus-putus = console. Hapus perangkat akan otomatis menghapus kabel yang terhubung.</p></div>
+          <div className="rounded-3xl bg-white p-5 text-sm shadow"><b>Status Lampu & Kabel:</b><div className="mt-2 flex flex-wrap gap-3"><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-green-500" /> Connected / kabel benar + IP lengkap</div><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-yellow-400" /> Waiting / kabel salah atau IP belum lengkap</div><div className="flex items-center gap-2"><span className="h-3 w-3 rounded-full bg-red-500" /> Disconnected</div></div><p className="mt-2 text-slate-600">Kabel hijau = jenis kabel benar. Lampu hijau hanya muncul jika perangkat sudah terhubung dan IP sudah lengkap.</p></div>
         </aside>
       </section>
     </main>
