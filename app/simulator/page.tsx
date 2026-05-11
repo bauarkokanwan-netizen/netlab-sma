@@ -17,9 +17,9 @@ import {
   NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Cable, Monitor, Router, Server, Plus, Play, Trash2 } from "lucide-react";
+import { Cable, Monitor, Router, Server, Plus, Play, Trash2, Printer } from "lucide-react";
 
-type DeviceKind = "PC" | "Switch" | "Router";
+type DeviceKind = "PC" | "Switch" | "Router" | "Printer";
 
 type DeviceData = {
   label: string;
@@ -32,7 +32,14 @@ type DeviceData = {
 type AppNode = Node<DeviceData, "device">;
 
 function DeviceNode({ data }: NodeProps<AppNode>) {
-  const Icon = data.kind === "PC" ? Monitor : data.kind === "Router" ? Router : Server;
+  const Icon =
+    data.kind === "PC"
+      ? Monitor
+      : data.kind === "Router"
+      ? Router
+      : data.kind === "Printer"
+      ? Printer
+      : Server;
 
   return (
     <div className="relative min-w-[170px] rounded-2xl border-2 border-slate-700 bg-white px-4 py-3 text-center shadow-sm">
@@ -88,6 +95,7 @@ function isConnected(start: string, end: string, edges: Edge[]) {
 function getIcon(kind: DeviceKind) {
   if (kind === "PC") return <Monitor className="h-5 w-5" />;
   if (kind === "Router") return <Router className="h-5 w-5" />;
+  if (kind === "Printer") return <Printer className="h-5 w-5" />;
   return <Server className="h-5 w-5" />;
 }
 
@@ -97,10 +105,13 @@ export default function SimulatorPage() {
   const [selectedId, setSelectedId] = useState("");
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
-  const [result, setResult] = useState("Canvas kosong. Tambahkan PC, Switch, atau Router untuk mulai praktik.");
+  const [result, setResult] = useState("Canvas kosong. Tambahkan PC, Switch, Router, atau Printer untuk mulai praktik.");
 
   const selectedNode = nodes.find((node) => node.id === selectedId);
-  const pcNodes = useMemo(() => nodes.filter((node) => node.data.kind === "PC"), [nodes]);
+  const endDeviceNodes = useMemo(
+    () => nodes.filter((node) => node.data.kind === "PC" || node.data.kind === "Printer"),
+    [nodes]
+  );
 
   const onConnect = useCallback(
     (connection: Connection) =>
@@ -118,8 +129,8 @@ export default function SimulatorPage() {
       data: {
         label: `${kind}${count}`,
         kind,
-        ip: kind === "PC" ? `192.168.1.${count + 1}` : "",
-        mask: kind === "PC" ? "255.255.255.0" : "",
+        ip: "",
+        mask: "",
         gateway: "",
       },
     };
@@ -127,7 +138,7 @@ export default function SimulatorPage() {
     setNodes((nds) => [...nds, newNode]);
     setSelectedId(id);
 
-    if (kind === "PC") {
+    if (kind === "PC" || kind === "Printer") {
       setFromId((prev) => prev || id);
       setToId((prev) => prev || id);
     }
@@ -146,12 +157,12 @@ export default function SimulatorPage() {
     const to = nodes.find((node) => node.id === toId);
 
     if (!from || !to || fromId === toId) {
-      setResult("Tambahkan minimal 2 PC, lalu pilih PC asal dan PC tujuan yang berbeda.");
+      setResult("Tambahkan minimal 2 perangkat akhir, lalu pilih asal dan tujuan yang berbeda.");
       return;
     }
 
-    if (from.data.kind !== "PC" || to.data.kind !== "PC") {
-      setResult("Ping hanya bisa dilakukan antar PC.");
+    if (!["PC", "Printer"].includes(from.data.kind) || !["PC", "Printer"].includes(to.data.kind)) {
+      setResult("Ping hanya bisa dilakukan dari/ke PC atau Printer.");
       return;
     }
 
@@ -161,7 +172,7 @@ export default function SimulatorPage() {
     }
 
     if (!from.data.ip || !to.data.ip) {
-      setResult("❌ Ping gagal: IP address PC belum lengkap.");
+      setResult("❌ Ping gagal: IP address perangkat belum lengkap.");
       return;
     }
 
@@ -184,6 +195,9 @@ export default function SimulatorPage() {
     setResult("Canvas dikosongkan. Mulai praktik dari awal.");
   }
 
+  const canConfigureIp =
+    selectedNode?.data.kind === "PC" || selectedNode?.data.kind === "Printer";
+
   return (
     <main className="flex min-h-screen flex-col bg-slate-100">
       <header className="border-b bg-white px-5 py-4">
@@ -201,6 +215,9 @@ export default function SimulatorPage() {
             </button>
             <button onClick={() => addDevice("Router")} className="flex items-center gap-2 rounded-xl bg-purple-600 px-4 py-2 text-white">
               <Plus className="h-4 w-4" /> Router
+            </button>
+            <button onClick={() => addDevice("Printer")} className="flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-white">
+              <Plus className="h-4 w-4" /> Printer
             </button>
             <button onClick={resetLab} className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-white">
               <Trash2 className="h-4 w-4" /> Reset
@@ -232,18 +249,18 @@ export default function SimulatorPage() {
             <h2 className="mb-3 flex items-center gap-2 text-lg font-bold">
               <Cable className="h-5 w-5" /> Test Ping
             </h2>
-            <label className="text-sm font-semibold">Dari PC</label>
+            <label className="text-sm font-semibold">Dari Perangkat</label>
             <select value={fromId} onChange={(e) => setFromId(e.target.value)} className="mt-1 w-full rounded-xl border p-2">
-              <option value="">Pilih PC</option>
-              {pcNodes.map((node) => (
+              <option value="">Pilih perangkat</option>
+              {endDeviceNodes.map((node) => (
                 <option key={node.id} value={node.id}>{String(node.data.label)}</option>
               ))}
             </select>
 
-            <label className="mt-3 block text-sm font-semibold">Ke PC</label>
+            <label className="mt-3 block text-sm font-semibold">Ke Perangkat</label>
             <select value={toId} onChange={(e) => setToId(e.target.value)} className="mt-1 w-full rounded-xl border p-2">
-              <option value="">Pilih PC</option>
-              {pcNodes.map((node) => (
+              <option value="">Pilih perangkat</option>
+              {endDeviceNodes.map((node) => (
                 <option key={node.id} value={node.id}>{String(node.data.label)}</option>
               ))}
             </select>
@@ -269,16 +286,16 @@ export default function SimulatorPage() {
                 <label className="block text-sm font-semibold">Nama</label>
                 <input value={String(selectedNode.data.label)} onChange={(e) => updateSelected("label", e.target.value)} className="w-full rounded-xl border p-2" />
 
-                {selectedNode.data.kind === "PC" && (
+                {canConfigureIp && (
                   <>
                     <label className="block text-sm font-semibold">IP Address</label>
-                    <input value={String(selectedNode.data.ip || "")} onChange={(e) => updateSelected("ip", e.target.value)} className="w-full rounded-xl border p-2" placeholder="192.168.1.2" />
+                    <input value={String(selectedNode.data.ip || "")} onChange={(e) => updateSelected("ip", e.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.2" />
 
                     <label className="block text-sm font-semibold">Subnet Mask</label>
-                    <input value={String(selectedNode.data.mask || "")} onChange={(e) => updateSelected("mask", e.target.value)} className="w-full rounded-xl border p-2" placeholder="255.255.255.0" />
+                    <input value={String(selectedNode.data.mask || "")} onChange={(e) => updateSelected("mask", e.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 255.255.255.0" />
 
                     <label className="block text-sm font-semibold">Gateway</label>
-                    <input value={String(selectedNode.data.gateway || "")} onChange={(e) => updateSelected("gateway", e.target.value)} className="w-full rounded-xl border p-2" placeholder="192.168.1.1" />
+                    <input value={String(selectedNode.data.gateway || "")} onChange={(e) => updateSelected("gateway", e.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.1" />
                   </>
                 )}
               </div>
@@ -288,7 +305,7 @@ export default function SimulatorPage() {
           </div>
 
           <div className="rounded-3xl bg-blue-50 p-5 text-sm text-slate-700">
-            <b>Catatan guru:</b> Awal simulator kosong. Siswa harus menambah PC, Switch/Router, menghubungkan kabel, lalu mengatur IP sendiri.
+            <b>Catatan guru:</b> PC dan Printer dibuat tanpa IP otomatis. Siswa harus mengisi IP, subnet mask, dan gateway secara manual.
           </div>
         </aside>
       </section>
