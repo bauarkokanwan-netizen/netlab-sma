@@ -24,9 +24,11 @@ type DeviceData = {
   ip?: string;
   mask?: string;
   gateway?: string;
-};
+} & Record<string, unknown>;
 
-const initialNodes: Node<DeviceData>[] = [
+type AppNode = Node<DeviceData>;
+
+const initialNodes: AppNode[] = [
   {
     id: "pc-1",
     type: "default",
@@ -87,7 +89,7 @@ function getIcon(kind: DeviceKind) {
 }
 
 export default function SimulatorPage() {
-  const [nodes, setNodes, onNodesChange] = useNodesState<DeviceData>(initialNodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState<AppNode>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [selectedId, setSelectedId] = useState("pc-1");
   const [fromId, setFromId] = useState("pc-1");
@@ -106,7 +108,7 @@ export default function SimulatorPage() {
   function addDevice(kind: DeviceKind) {
     const count = nodes.filter((node) => node.data.kind === kind).length + 1;
     const id = `${kind.toLowerCase()}-${Date.now()}`;
-    const newNode: Node<DeviceData> = {
+    const newNode: AppNode = {
       id,
       type: "default",
       position: { x: 120 + count * 35, y: 260 + count * 20 },
@@ -155,7 +157,7 @@ export default function SimulatorPage() {
       return;
     }
 
-    if (getSubnet24(from.data.ip) !== getSubnet24(to.data.ip)) {
+    if (getSubnet24(String(from.data.ip)) !== getSubnet24(String(to.data.ip))) {
       setResult(
         `❌ Ping gagal: subnet berbeda. ${from.data.ip} dan ${to.data.ip} tidak berada dalam jaringan /24 yang sama.`
       );
@@ -260,18 +262,18 @@ export default function SimulatorPage() {
                 </div>
 
                 <label className="block text-sm font-semibold">Nama</label>
-                <input value={selectedNode.data.label} onChange={(e) => updateSelected("label", e.target.value)} className="w-full rounded-xl border p-2" />
+                <input value={String(selectedNode.data.label)} onChange={(e) => updateSelected("label", e.target.value)} className="w-full rounded-xl border p-2" />
 
                 {selectedNode.data.kind === "PC" && (
                   <>
                     <label className="block text-sm font-semibold">IP Address</label>
-                    <input value={selectedNode.data.ip || ""} onChange={(e) => updateSelected("ip", e.target.value)} className="w-full rounded-xl border p-2" placeholder="192.168.1.2" />
+                    <input value={String(selectedNode.data.ip || "")} onChange={(e) => updateSelected("ip", e.target.value)} className="w-full rounded-xl border p-2" placeholder="192.168.1.2" />
 
                     <label className="block text-sm font-semibold">Subnet Mask</label>
-                    <input value={selectedNode.data.mask || ""} onChange={(e) => updateSelected("mask", e.target.value)} className="w-full rounded-xl border p-2" placeholder="255.255.255.0" />
+                    <input value={String(selectedNode.data.mask || "")} onChange={(e) => updateSelected("mask", e.target.value)} className="w-full rounded-xl border p-2" placeholder="255.255.255.0" />
 
                     <label className="block text-sm font-semibold">Gateway</label>
-                    <input value={selectedNode.data.gateway || ""} onChange={(e) => updateSelected("gateway", e.target.value)} className="w-full rounded-xl border p-2" placeholder="192.168.1.1" />
+                    <input value={String(selectedNode.data.gateway || "")} onChange={(e) => updateSelected("gateway", e.target.value)} className="w-full rounded-xl border p-2" placeholder="192.168.1.1" />
                   </>
                 )}
               </div>
