@@ -17,9 +17,10 @@ import {
   NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Cable, Monitor, Router, Server, Plus, Play, Trash2, Printer } from "lucide-react";
+import { Cable, Monitor, Router, Server, Plus, Play, Trash2, Printer, CheckCircle2, XCircle } from "lucide-react";
 
 type DeviceKind = "PC" | "Switch" | "Router" | "Printer";
+type CableKind = "straight" | "crossover" | "console";
 
 type DeviceData = {
   label: string;
@@ -29,7 +30,13 @@ type DeviceData = {
   gateway?: string;
 } & Record<string, unknown>;
 
+type CableData = {
+  cableType?: CableKind;
+  label?: string;
+} & Record<string, unknown>;
+
 type AppNode = Node<DeviceData, "device">;
+type AppEdge = Edge<CableData>;
 
 function DeviceNode({ data }: NodeProps<AppNode>) {
   const Icon =
@@ -53,6 +60,9 @@ function DeviceNode({ data }: NodeProps<AppNode>) {
         <span>{String(data.label)}</span>
       </div>
       {data.ip ? <div className="mt-1 text-xs text-slate-600">{String(data.ip)}</div> : null}
+      <div className="mt-2 flex items-center justify-center gap-1 text-[11px] text-green-700">
+        <span className="h-2 w-2 rounded-full bg-green-500" /> Port aktif
+      </div>
     </div>
   );
 }
@@ -62,7 +72,7 @@ const nodeTypes = {
 };
 
 const initialNodes: AppNode[] = [];
-const initialEdges: Edge[] = [];
+const initialEdges: AppEdge[] = [];
 
 function getSubnet24(ip = "") {
   const parts = ip.trim().split(".");
@@ -70,9 +80,32 @@ function getSubnet24(ip = "") {
   return parts.slice(0, 3).join(".");
 }
 
-function isConnected(start: string, end: string, edges: Edge[]) {
+function isEndDevice(kind: DeviceKind) {
+  return kind === "PC" || kind === "Printer";
+}
+
+function isCorrectCable(sourceKind: DeviceKind, targetKind: DeviceKind, cableType: CableKind) {
+  if (cableType === "console") return false;
+  const sourceEnd = isEndDevice(sourceKind);
+  const targetEnd = isEndDevice(targetKind);
+
+  if (sourceEnd && targetEnd) return cableType === "crossover";
+  if ((sourceEnd && targetKind === "Switch") || (targetEnd && sourceKind === "Switch")) return cableType === "straight";
+  if ((sourceKind === "Router" && targetKind === "Switch") || (sourceKind === "Switch" && targetKind === "Router")) return cableType === "straight";
+  return true;
+}
+
+function isConnected(start: string, end: string, edges: AppEdge[], nodes: AppNode[]) {
   const graph = new Map<string, string[]>();
+
   for (const edge of edges) {
+    const source = nodes.find((node) => node.id === edge.source);
+    const target = nodes.find((node) => node.id === edge.target);
+    if (!source || !target) continue;
+
+    const cableType = edge.data?.cableType || "straight";
+    if (!isCorrectCable(source.data.kind, target.data.kind, cableType)) continue;
+
     graph.set(edge.source, [...(graph.get(edge.source) || []), edge.target]);
     graph.set(edge.target, [...(graph.get(edge.target) || []), edge.source]);
   }
@@ -99,24 +132,55 @@ function getIcon(kind: DeviceKind) {
   return <Server className="h-5 w-5" />;
 }
 
+function cableLabel(cableType: CableKind) {
+  if (cableType === "straight") return "Straight";
+  if (cableType === "crossover") return "Crossover";
+  return "Console";
+}
+
 export default function SimulatorPage() {
   const [nodes, setNodes, onNodesChange] = useNodesState<AppNode>(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<AppEdge>(initialEdges);
   const [selectedId, setSelectedId] = useState("");
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
+  const [cableType, setCableType] = useState<CableKind>("straight");
   const [result, setResult] = useState("Canvas kosong. Tambahkan PC, Switch, Router, atau Printer untuk mulai praktik.");
 
   const selectedNode = nodes.find((node) => node.id === selectedId);
   const endDeviceNodes = useMemo(
-    () => nodes.filter((node) => node.data.kind === "PC" || node.data.kind === "Printer"),
+    () => nodes.filter((node) => isEndDevice(node.data.kind)),
     [nodes]
   );
 
+  const validCableCount = useMemo(() => {
+    return edges.filter((edge) => {
+      const source = nodes.find((node) => node.id === edge.source);
+      const target = nodes.find((node) => node.id === edge.target);
+      if (!source || !target) return false;
+      return isCorrectCable(source.data.kind, target.data.kind, edge.data?.cableType || "straight");
+    }).length;
+  }, [edges, nodes]);
+
+  const invalidCableCount = edges.length - validCableCount;
+  const configuredEndDeviceCount = endDeviceNodes.filter((node) => node.data.ip && node.data.mask).length;
+  const hasSwitch = nodes.some((node) => node.data.kind === "Switch");
+
   const onConnect = useCallback(
     (connection: Connection) =>
-      setEdges((eds) => addEdge({ ...connection, animated: true }, eds)),
-    [setEdges]
+      setEdges((eds) =>
+        addEdge(
+          {
+            ...connection,
+            animated: true,
+            label: cableLabel(cableType),
+            data: { cableType, label: cableLabel(cableType) },
+            style: cableType === "console" ? { strokeDasharray: "6 4" } : undefined,
+          },
+          eds
+        )
+      ),
+    [setEdges, cableType]
   );
 
   function addDevice(kind: DeviceKind) {
@@ -138,7 +202,7 @@ export default function SimulatorPage() {
     setNodes((nds) => [...nds, newNode]);
     setSelectedId(id);
 
-    if (kind === "PC" || kind === "Printer") {
+    if (isEndDevice(kind)) {
       setFromId((prev) => prev || id);
       setToId((prev) => prev || id);
     }
@@ -161,13 +225,13 @@ export default function SimulatorPage() {
       return;
     }
 
-    if (!["PC", "Printer"].includes(from.data.kind) || !["PC", "Printer"].includes(to.data.kind)) {
+    if (!isEndDevice(from.data.kind) || !isEndDevice(to.data.kind)) {
       setResult("Ping hanya bisa dilakukan dari/ke PC atau Printer.");
       return;
     }
 
-    if (!isConnected(from.id, to.id, edges)) {
-      setResult(`❌ Ping gagal: ${from.data.label} belum terhubung ke ${to.data.label}.`);
+    if (!isConnected(from.id, to.id, edges, nodes)) {
+      setResult(`❌ Ping gagal: ${from.data.label} belum terhubung ke ${to.data.label}, atau jenis kabel salah.`);
       return;
     }
 
@@ -204,29 +268,24 @@ export default function SimulatorPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold">NetLab SMA - Simulator</h1>
-            <p className="text-sm text-slate-500">Canvas kosong seperti Cisco Packet Tracer. Tambahkan perangkat sendiri, lalu tarik kabel dari port biru/hijau.</p>
+            <p className="text-sm text-slate-500">Canvas kosong seperti Cisco Packet Tracer. Pilih kabel, tambah perangkat, lalu tarik kabel dari port biru/hijau.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button onClick={() => addDevice("PC")} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-white">
-              <Plus className="h-4 w-4" /> PC
-            </button>
-            <button onClick={() => addDevice("Switch")} className="flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-white">
-              <Plus className="h-4 w-4" /> Switch
-            </button>
-            <button onClick={() => addDevice("Router")} className="flex items-center gap-2 rounded-xl bg-purple-600 px-4 py-2 text-white">
-              <Plus className="h-4 w-4" /> Router
-            </button>
-            <button onClick={() => addDevice("Printer")} className="flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-white">
-              <Plus className="h-4 w-4" /> Printer
-            </button>
-            <button onClick={resetLab} className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-white">
-              <Trash2 className="h-4 w-4" /> Reset
-            </button>
+            <select value={cableType} onChange={(e) => setCableType(e.target.value as CableKind)} className="rounded-xl border bg-white px-3 py-2 text-sm font-semibold">
+              <option value="straight">Kabel Straight</option>
+              <option value="crossover">Kabel Crossover</option>
+              <option value="console">Kabel Console</option>
+            </select>
+            <button onClick={() => addDevice("PC")} className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-white"><Plus className="h-4 w-4" /> PC</button>
+            <button onClick={() => addDevice("Switch")} className="flex items-center gap-2 rounded-xl bg-slate-800 px-4 py-2 text-white"><Plus className="h-4 w-4" /> Switch</button>
+            <button onClick={() => addDevice("Router")} className="flex items-center gap-2 rounded-xl bg-purple-600 px-4 py-2 text-white"><Plus className="h-4 w-4" /> Router</button>
+            <button onClick={() => addDevice("Printer")} className="flex items-center gap-2 rounded-xl bg-amber-600 px-4 py-2 text-white"><Plus className="h-4 w-4" /> Printer</button>
+            <button onClick={resetLab} className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-white"><Trash2 className="h-4 w-4" /> Reset</button>
           </div>
         </div>
       </header>
 
-      <section className="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_360px]">
+      <section className="grid flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[1fr_380px]">
         <div className="h-[650px] overflow-hidden rounded-3xl border bg-white shadow">
           <ReactFlow
             nodes={nodes}
@@ -246,31 +305,31 @@ export default function SimulatorPage() {
 
         <aside className="space-y-4">
           <div className="rounded-3xl bg-white p-5 shadow">
-            <h2 className="mb-3 flex items-center gap-2 text-lg font-bold">
-              <Cable className="h-5 w-5" /> Test Ping
-            </h2>
+            <h2 className="mb-3 flex items-center gap-2 text-lg font-bold"><Cable className="h-5 w-5" /> Test Ping</h2>
             <label className="text-sm font-semibold">Dari Perangkat</label>
             <select value={fromId} onChange={(e) => setFromId(e.target.value)} className="mt-1 w-full rounded-xl border p-2">
               <option value="">Pilih perangkat</option>
-              {endDeviceNodes.map((node) => (
-                <option key={node.id} value={node.id}>{String(node.data.label)}</option>
-              ))}
+              {endDeviceNodes.map((node) => <option key={node.id} value={node.id}>{String(node.data.label)}</option>)}
             </select>
 
             <label className="mt-3 block text-sm font-semibold">Ke Perangkat</label>
             <select value={toId} onChange={(e) => setToId(e.target.value)} className="mt-1 w-full rounded-xl border p-2">
               <option value="">Pilih perangkat</option>
-              {endDeviceNodes.map((node) => (
-                <option key={node.id} value={node.id}>{String(node.data.label)}</option>
-              ))}
+              {endDeviceNodes.map((node) => <option key={node.id} value={node.id}>{String(node.data.label)}</option>)}
             </select>
 
-            <button onClick={runPing} className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-green-600 px-4 py-3 font-semibold text-white">
-              <Play className="h-4 w-4" /> Test Ping
-            </button>
+            <button onClick={runPing} className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-green-600 px-4 py-3 font-semibold text-white"><Play className="h-4 w-4" /> Test Ping</button>
+            <div className="mt-4 rounded-2xl bg-slate-100 p-4 text-sm font-medium">{result}</div>
+          </div>
 
-            <div className="mt-4 rounded-2xl bg-slate-100 p-4 text-sm font-medium">
-              {result}
+          <div className="rounded-3xl bg-white p-5 shadow">
+            <h2 className="mb-3 text-lg font-bold">Cek Otomatis Praktikum</h2>
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center gap-2">{endDeviceNodes.length >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Minimal 2 PC/Printer</div>
+              <div className="flex items-center gap-2">{hasSwitch ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Ada Switch</div>
+              <div className="flex items-center gap-2">{edges.length >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Minimal 2 kabel</div>
+              <div className="flex items-center gap-2">{invalidCableCount === 0 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} Kabel benar: {validCableCount}/{edges.length}</div>
+              <div className="flex items-center gap-2">{configuredEndDeviceCount >= 2 ? <CheckCircle2 className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />} IP terisi: {configuredEndDeviceCount}/{endDeviceNodes.length}</div>
             </div>
           </div>
 
@@ -278,22 +337,15 @@ export default function SimulatorPage() {
             <h2 className="mb-3 text-lg font-bold">Konfigurasi Perangkat</h2>
             {selectedNode ? (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 rounded-2xl bg-slate-100 p-3">
-                  {getIcon(selectedNode.data.kind)}
-                  <span className="font-semibold">{selectedNode.data.kind}</span>
-                </div>
-
+                <div className="flex items-center gap-2 rounded-2xl bg-slate-100 p-3">{getIcon(selectedNode.data.kind)}<span className="font-semibold">{selectedNode.data.kind}</span></div>
                 <label className="block text-sm font-semibold">Nama</label>
                 <input value={String(selectedNode.data.label)} onChange={(e) => updateSelected("label", e.target.value)} className="w-full rounded-xl border p-2" />
-
                 {canConfigureIp && (
                   <>
                     <label className="block text-sm font-semibold">IP Address</label>
                     <input value={String(selectedNode.data.ip || "")} onChange={(e) => updateSelected("ip", e.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.2" />
-
                     <label className="block text-sm font-semibold">Subnet Mask</label>
                     <input value={String(selectedNode.data.mask || "")} onChange={(e) => updateSelected("mask", e.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 255.255.255.0" />
-
                     <label className="block text-sm font-semibold">Gateway</label>
                     <input value={String(selectedNode.data.gateway || "")} onChange={(e) => updateSelected("gateway", e.target.value)} className="w-full rounded-xl border p-2" placeholder="contoh: 192.168.1.1" />
                   </>
@@ -305,7 +357,7 @@ export default function SimulatorPage() {
           </div>
 
           <div className="rounded-3xl bg-blue-50 p-5 text-sm text-slate-700">
-            <b>Catatan guru:</b> PC dan Printer dibuat tanpa IP otomatis. Siswa harus mengisi IP, subnet mask, dan gateway secara manual.
+            <b>Catatan kabel:</b> PC/Printer ke Switch pakai Straight. PC ke PC atau PC ke Printer pakai Crossover. Console belum dipakai untuk ping.
           </div>
         </aside>
       </section>
